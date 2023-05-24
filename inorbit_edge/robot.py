@@ -122,34 +122,8 @@ class RobotSession:
             )
             self.use_websockets = True
 
-        # Create mqtt client
-        if self.use_websockets:
-            self.client = mqtt.Client(protocol=mqtt.MQTTv311, transport="websockets")
-            self.logger.debug("MQTT client created using websockets transport")
-        else:
-            self.client = mqtt.Client(protocol=mqtt.MQTTv311, transport="tcp")
-            self.logger.debug("MQTT client created using tcp transport")
-
-        # Configure proxy hostname and port if necessary
-        if self.http_proxy is not None:
-            parts = urlsplit(self.http_proxy)
-            proxy_hostname = parts.hostname
-            proxy_port = parts.port
-
-            if not proxy_port:
-                self.logger.warn("Empty proxy port. Is 'HTTP_PROXY' correct?")
-
-            self.logger.debug(
-                "Configuring client proxy: {}:{}".format(proxy_hostname, proxy_port)
-            )
-            self.client.proxy_set(
-                proxy_type=socks.HTTP, proxy_addr=proxy_hostname, proxy_port=proxy_port
-            )
-
-        # Register MQTT client callbacks
-        self.client.on_connect = self._on_connect
-        self.client.on_message = self._on_message
-        self.client.on_disconnect = self._on_disconnect
+        # Setup MQTT client
+        self._new_mqtt_client()
 
         # Functions to handle incoming MQTT messages.
         # They are mapped by MQTT subtopic e.g.
@@ -196,6 +170,48 @@ class RobotSession:
                 "min_time_between_calls": 1,  # seconds
             },
         }
+
+    def _new_mqtt_client(self):
+        """Give this RobotSession a new instance of MQTT Client. If a client already 
+        exists, remove it and reate a new one"""
+
+        # Delete the old client
+        if hasattr(self, "client"):
+            if isinstance(self.client, mqtt.Client):
+                self.client.on_connect = None
+                self.client.on_message = None
+                self.client.on_disconnect = None
+            del self.client
+
+        # Create mqtt client
+        if self.use_websockets:
+            client = mqtt.Client(protocol=mqtt.MQTTv311, transport="websockets")
+            self.logger.debug("MQTT client created using websockets transport")
+        else:
+            client = mqtt.Client(protocol=mqtt.MQTTv311, transport="tcp")
+            self.logger.debug("MQTT client created using tcp transport")
+
+        # Configure proxy hostname and port if necessary
+        if self.http_proxy is not None:
+            parts = urlsplit(self.http_proxy)
+            proxy_hostname = parts.hostname
+            proxy_port = parts.port
+
+            if not proxy_port:
+                self.logger.warn("Empty proxy port. Is 'HTTP_PROXY' correct?")
+
+            self.logger.debug(
+                "Configuring client proxy: {}:{}".format(proxy_hostname, proxy_port)
+            )
+            client.proxy_set(
+                proxy_type=socks.HTTP, proxy_addr=proxy_hostname, proxy_port=proxy_port
+            )
+
+        # Register MQTT client callbacks
+        client.on_connect = self._on_connect
+        client.on_message = self._on_message
+        client.on_disconnect = self._on_disconnect
+        self.client = client
 
     def _get_robot_subtopic(self, subtopic):
         """Build topic for this robot.
@@ -435,8 +451,10 @@ class RobotSession:
             return
         if args[0] == "load_module" and len(args) >= 3:
             self._handle_load_module(args[1], args[2])
-        if args[0] == "unload_module" and len(args) >= 2:
+        elif args[0] == "unload_module" and len(args) >= 2:
             self._handle_unload_module(args[1])
+        elif args[0] == "restart":
+            self._handle_restart_command()
 
     def _handle_load_module(self, module_name, run_level):
         """Handles a load_module command"""
@@ -447,6 +465,16 @@ class RobotSession:
         """Handles an unload_module command"""
         if module_name == INORBIT_MODULE_CAMERAS:
             self._stop_cameras_streaming()
+
+    def _handle_restart_command(self):
+        """Handles the Restart Agent command"""
+        # TODO: What happens to the cameras?
+        self.logger.info("Handling restart command")
+
+        self._new_mqtt_client()
+
+        self.logger.info("Reconnecting")
+        self.connect()
 
     def _start_cameras_streaming(self):
         """Start streaming on all registered cameras"""
@@ -706,9 +734,9 @@ class RobotSession:
         """Ends session, disconnecting from cloud services"""
         self.logger.info("Ending robot session")
         self._stop_cameras_streaming()
-        self._send_robot_status(robot_status="0")
 
-        # TODO: Unsubscribe from topics
+        # mqtt.Client.disconnect() will send status "0" to InOrbit automatically
+        # as the "will" message configured in self.connect()
 
         self.client.disconnect()
 
