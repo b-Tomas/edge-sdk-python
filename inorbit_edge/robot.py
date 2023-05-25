@@ -170,6 +170,14 @@ class RobotSession:
                 "min_time_between_calls": 1,  # seconds
             },
         }
+        
+        # If MQTT gets disconnected and can't reconnect after this many seconds, attempt to
+        # rebuild the mqtt client and get new MQTT credentials.
+        self.disconnect_restart_seconds = 300  # 5 minutes
+        if "INORBIT_DISCONNECT_RESTART_SECONDS" in os.environ:
+            self.disconnect_restart_seconds = int(
+                os.environ["INORBIT_DISCONNECT_RESTART_SECONDS"]
+            )
 
     def _new_mqtt_client(self):
         """Give this RobotSession a new instance of MQTT Client. If a client already 
@@ -335,6 +343,8 @@ class RobotSession:
         # ask server to resend modules, so our state is consistent with the server side
         self._resend_modules()
 
+        self._restart_timer_stop()
+
     def _on_message(self, client, userdata, msg):
         """MQTT client message callback.
 
@@ -374,6 +384,31 @@ class RobotSession:
             )
         else:
             self.logger.info("Disconnected from MQTT broker")
+        self._restart_timer_start()
+        
+    def _restart_timer_start(self):
+        """
+        Starts a timer to reboot the mqtt client if it hasn't been able to connect after
+        self.disconnect_reboot_seconds seconds
+        """
+
+        self.logger.info("Starting disconnection timer")
+        if not hasattr(self, "_reboot_timer") or not self._reboot_timer.is_alive():
+            self._reboot_timer = threading.Timer(self.disconnect_restart_seconds, self._restart)
+            self._reboot_timer.start()
+
+    def _restart_timer_stop(self):
+        """
+        Clears any pending reboot timers
+        """
+
+        self.logger.info("Stopping disconnection timer")
+        if hasattr(self, "_reboot_timer"):
+            try:
+                self._reboot_timer.cancel()
+                del self._reboot_timer
+            except Exception:
+                self.logger.exception("Exception cancelling reboot timer")
 
     def _send_echo(self, topic, payload):
         """Sends an echo response to the server.
@@ -454,7 +489,7 @@ class RobotSession:
         elif args[0] == "unload_module" and len(args) >= 2:
             self._handle_unload_module(args[1])
         elif args[0] == "restart":
-            self._handle_restart_command()
+            self._restart()
 
     def _handle_load_module(self, module_name, run_level):
         """Handles a load_module command"""
@@ -466,9 +501,9 @@ class RobotSession:
         if module_name == INORBIT_MODULE_CAMERAS:
             self._stop_cameras_streaming()
 
-    def _handle_restart_command(self):
-        """Handles the Restart Agent command"""
-        self.logger.info("Handling restart command")
+    def _restart(self):
+        """Stops the current mqtt connection and starts a new one"""
+        self.logger.info("Rebuilding connection")
 
         self._new_mqtt_client()
 
