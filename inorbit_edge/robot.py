@@ -468,12 +468,12 @@ class RobotSession:
 
     def _handle_restart_command(self):
         """Handles the Restart Agent command"""
-        # TODO: What happens to the cameras?
         self.logger.info("Handling restart command")
 
         self._new_mqtt_client()
 
         self.logger.info("Reconnecting")
+        # InOrbit will automatically reload modules on reconnection
         self.connect()
 
     def _start_cameras_streaming(self):
