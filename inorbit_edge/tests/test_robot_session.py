@@ -3,7 +3,9 @@
 
 from inorbit_edge.robot import RobotSession
 from inorbit_edge.robot import INORBIT_CLOUD_SDK_ROBOT_CONFIG_URL
+from inorbit_edge.robot import DISCONNECT_RESTART_SECONDS
 from inorbit_edge import get_module_version
+import time
 
 
 def test_robot_session_init(monkeypatch):
@@ -23,6 +25,7 @@ def test_robot_session_init(monkeypatch):
             not robot_session.use_websockets,
             robot_session.client._transport == "tcp",
             robot_session.http_proxy is None,
+            robot_session.disconnect_restart_seconds == DISCONNECT_RESTART_SECONDS,
         ]
     )
 
@@ -59,6 +62,13 @@ def test_robot_session_init(monkeypatch):
             robot_session.http_proxy is None,
         ]
     )
+
+    # test with custom restart seconds time
+    robot_session = RobotSession(
+        robot_id="id_123", robot_name="name_123", robot_key="robotkey_123", disconnect_restart_seconds=123
+    )
+
+    assert robot_session.disconnect_restart_seconds == 123
 
 
 def test_robot_session_connect(mock_mqtt_client, mock_inorbit_api):
@@ -100,3 +110,36 @@ def test_method_throttling():
     assert not robot_session._should_publish_message(method="publish_pose")
     robot_session._publish_throttling["publish_pose"]["last_ts"] = 0
     assert robot_session._should_publish_message(method="publish_pose")
+
+
+def test_auto_restart(mock_mqtt_client, mocker):
+    # Test the timer start/stop
+    robot_session = RobotSession(
+        robot_id="id_123",
+        robot_name="name_123",
+        api_key="apikey_123"
+    )
+
+    # _on_disconnect() should start the timer. rc!=0 is un unexpected disconnection
+    robot_session._on_disconnect(mock_mqtt_client, ..., rc=1)
+    assert robot_session._reboot_timer.is_alive()
+
+    # Connect again. rc==0 means successful connection
+    robot_session._on_connect(..., ..., ..., 0)
+    assert not hasattr(robot_session, "_reboot_timer")
+
+    # Test that the timer restarts the client
+    robot_session = RobotSession(
+        robot_id="id_123",
+        robot_name="name_123",
+        api_key="apikey_123",
+        disconnect_restart_seconds=0  # The timer is triggered immediately
+    )
+    restart_spy = mocker.spy(robot_session, "_restart")
+
+    # _on_disconnect() should start the timer. rc!=0 is un unexpected disconnection
+    robot_session._on_disconnect(mock_mqtt_client, ..., rc=1)
+    restart_spy.assert_called_once()
+    # Connect again. rc==0 means successful connection
+    robot_session._on_connect(..., ..., ..., 0)
+    assert not hasattr(robot_session, "_reboot_timer")

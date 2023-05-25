@@ -74,6 +74,8 @@ CUSTOM_COMMAND_STATUS_ABORTED = "aborted"
 
 ROBOT_PATH_POINTS_LIMIT = 1000
 
+DISCONNECT_RESTART_SECONDS = 300  # 5 minutes
+
 
 class RobotSession:
     def __init__(self, robot_id, robot_name, api_key=None, **kwargs) -> None:
@@ -87,6 +89,8 @@ class RobotSession:
             when using InOrbit Connect (https://connect.inorbit.ai/).
             endpoint (str): InOrbit URL. Defaults: INORBIT_CLOUD_SDK_ROBOT_CONFIG_URL.
             use_ssl (bool): Configures MQTT client to use SSL. Defaults: True.
+            disconnect_restart_seconds (int): Sets wait time in seconds from a disconnection
+            before restarting the client. Defaults: DISCONNECT_RESTART_SECONDS
         """
 
         self.api_key = api_key
@@ -122,7 +126,12 @@ class RobotSession:
             )
             self.use_websockets = True
 
-        # Setup MQTT client
+        # If MQTT gets disconnected unexpectedly and can't reconnect after this many
+        # seconds, attempt to rebuild the mqtt client and get new MQTT credentials.
+        self.disconnect_restart_seconds = kwargs.get(
+            "disconnect_restart_seconds", DISCONNECT_RESTART_SECONDS)
+
+        # Set up MQTT client
         self._new_mqtt_client()
 
         # Functions to handle incoming MQTT messages.
@@ -170,14 +179,6 @@ class RobotSession:
                 "min_time_between_calls": 1,  # seconds
             },
         }
-        
-        # If MQTT gets disconnected and can't reconnect after this many seconds, attempt to
-        # rebuild the mqtt client and get new MQTT credentials.
-        self.disconnect_restart_seconds = 300  # 5 minutes
-        if "INORBIT_DISCONNECT_RESTART_SECONDS" in os.environ:
-            self.disconnect_restart_seconds = int(
-                os.environ["INORBIT_DISCONNECT_RESTART_SECONDS"]
-            )
 
     def _new_mqtt_client(self):
         """Give this RobotSession a new instance of MQTT Client. If a client already 
@@ -314,10 +315,12 @@ class RobotSession:
         # Other values are taken as errors (check here:
         # http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718035)
         # so connection process needs to be aborted.
+        self._restart_timer_stop()
         if rc == 0:
             self.logger.info("Connected to MQTT")
         else:
             self.logger.warn("Unable to connect. rc = {:d}.".format(rc))
+            self._restart_timer_start()
             return
 
         # Send robot online status.
@@ -342,8 +345,6 @@ class RobotSession:
         self.client.subscribe(topic=self._get_robot_subtopic(subtopic=MQTT_IN_CMD))
         # ask server to resend modules, so our state is consistent with the server side
         self._resend_modules()
-
-        self._restart_timer_stop()
 
     def _on_message(self, client, userdata, msg):
         """MQTT client message callback.
@@ -382,10 +383,10 @@ class RobotSession:
             self.logger.warn(
                 "Unexpected disconnection: {}".format(mqtt.error_string(rc))
             )
+            self._restart_timer_start()
         else:
             self.logger.info("Disconnected from MQTT broker")
-        self._restart_timer_start()
-        
+
     def _restart_timer_start(self):
         """
         Starts a timer to reboot the mqtt client if it hasn't been able to connect after
@@ -394,7 +395,8 @@ class RobotSession:
 
         self.logger.info("Starting disconnection timer")
         if not hasattr(self, "_reboot_timer") or not self._reboot_timer.is_alive():
-            self._reboot_timer = threading.Timer(self.disconnect_restart_seconds, self._restart)
+            self._reboot_timer = threading.Timer(
+                self.disconnect_restart_seconds, self._restart)
             self._reboot_timer.start()
 
     def _restart_timer_stop(self):
