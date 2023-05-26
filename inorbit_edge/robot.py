@@ -172,7 +172,7 @@ class RobotSession:
         }
 
     def _new_mqtt_client(self):
-        """Give this RobotSession a new instance of MQTT Client. If a client already 
+        """Give this RobotSession a new instance of MQTT Client. If a client already
         exists, remove it and reate a new one"""
 
         # Delete the old client

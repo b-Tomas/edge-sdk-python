@@ -100,3 +100,20 @@ def test_method_throttling():
     assert not robot_session._should_publish_message(method="publish_pose")
     robot_session._publish_throttling["publish_pose"]["last_ts"] = 0
     assert robot_session._should_publish_message(method="publish_pose")
+
+
+def test_restart_command(mock_mqtt_client, mock_inorbit_api, mocker):
+    robot_session = RobotSession(
+        robot_id="id_123", robot_name="name_123", api_key="apikey_123"
+    )
+
+    robot_session.connect()
+    assert hasattr(robot_session, "client")
+    connect_spy = mocker.spy(robot_session, "connect")
+    new_client_spy = mocker.spy(robot_session, "_new_mqtt_client")
+
+    # Trigger the restart command
+    robot_session._handle_in_cmd(b"restart|123")
+
+    connect_spy.assert_called_once()
+    new_client_spy.assert_called_once()
