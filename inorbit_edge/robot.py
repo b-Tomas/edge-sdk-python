@@ -177,10 +177,9 @@ class RobotSession:
 
         # Delete the old client
         if hasattr(self, "client"):
-            if isinstance(self.client, mqtt.Client):
-                self.client.on_connect = None
-                self.client.on_message = None
-                self.client.on_disconnect = None
+            self.client.on_connect = None
+            self.client.on_message = None
+            self.client.on_disconnect = None
             del self.client
 
         # Create mqtt client
